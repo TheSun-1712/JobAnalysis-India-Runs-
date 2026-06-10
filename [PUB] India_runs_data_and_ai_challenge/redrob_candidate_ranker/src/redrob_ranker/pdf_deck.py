@@ -29,7 +29,7 @@ def _wrap_lines(text: str, width: int = 88) -> list[str]:
 
 def _page_stream(title: str, bullets: list[str]) -> str:
     y = 760
-    parts = ["BT", "/F1 18 Tf", f"72 {y} Td", f"({_escape_pdf_text(title)}) Tj"]
+    parts = ["BT", "/F1 18 Tf", f"1 0 0 1 72 {y} Tm", f"({_escape_pdf_text(title)}) Tj"]
     y -= 30
     parts.append("/F1 11 Tf")
     for bullet in bullets:
@@ -37,7 +37,7 @@ def _page_stream(title: str, bullets: list[str]) -> str:
             if y < 72:
                 break
             text = ("- " if line_index == 0 else "  ") + line
-            parts.append(f"72 {y} Td ({_escape_pdf_text(text)}) Tj")
+            parts.append(f"1 0 0 1 72 {y} Tm ({_escape_pdf_text(text)}) Tj")
             y -= 18
     parts.append("ET")
     return "\n".join(parts)
