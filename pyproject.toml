@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "redrob-candidate-ranker"
 version = "0.1.0"
 description = "Hybrid candidate ranking system for the Redrob hackathon"
-requires-python = ">=3.14"
+requires-python = ">=3.11"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
