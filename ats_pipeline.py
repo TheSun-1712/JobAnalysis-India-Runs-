@@ -251,6 +251,23 @@ class FakeDetector:
 # Phase 4 & 5: Multi-Dimensional Scorer
 # ==========================================
 
+# Synonym lookup table for semantic search expansion
+SYNONYM_MAP: Dict[str, List[str]] = {
+    "llm": ["large language model", "gpt", "transformer", "llama", "rag", "generative ai"],
+    "large language model": ["llm", "gpt", "transformer", "llama", "rag", "generative ai"],
+    "rag": ["retrieval augmented generation", "vector search", "embeddings", "llm"],
+    "vector database": ["vector db", "milvus", "qdrant", "pinecone", "weaviate", "faiss", "elasticsearch"],
+    "vector db": ["vector database", "milvus", "qdrant", "pinecone", "weaviate", "faiss", "elasticsearch"],
+    "embeddings": ["vector embeddings", "sentence transformers", "dense retrieval", "semantic search"],
+    "nlp": ["natural language processing", "text mining", "spacy", "nltk", "bert", "transformer"],
+    "spark": ["pyspark", "apache spark", "hadoop", "mapreduce", "databricks"],
+    "sql": ["database", "postgres", "mysql", "oracle", "nosql", "querying"],
+    "aws": ["amazon web services", "cloud", "s3", "ec2", "rds", "lambda"],
+    "kubernetes": ["k8s", "docker", "containers", "orchestration", "helm"],
+    "ml": ["machine learning", "deep learning", "ai", "artificial intelligence", "scikit-learn", "xgboost"],
+    "machine learning": ["ml", "deep learning", "ai", "artificial intelligence", "scikit-learn", "xgboost"]
+}
+
 class CandidateScorer:
     def __init__(self, config: ScoringConfig, baseline_profiles: List[CandidateProfile]):
         self.config = config
@@ -272,12 +289,22 @@ class CandidateScorer:
         query = self.config.domain_keywords + self.config.must_have_skills
         query_tokens = [q.lower() for q in query]
         
+        # Expand query tokens with synonyms
+        expanded_query_tokens: Dict[str, float] = {}
+        for q in query_tokens:
+            expanded_query_tokens[q] = 1.0  # full weight for exact match
+            if q in SYNONYM_MAP:
+                for syn in SYNONYM_MAP[q]:
+                    for word in syn.split():
+                        if word not in expanded_query_tokens:
+                            expanded_query_tokens[word] = 0.5  # half weight for synonym matches
+                            
         doc_tokens = profile.raw_text.split()
         bm25_score = 0.0
         doc_len = len(doc_tokens)
         if doc_len > 0:
             counts = Counter(doc_tokens)
-            for q in query_tokens:
+            for q, weight in expanded_query_tokens.items():
                 if q in self.bm25.idf:
                     idf = self.bm25.idf[q]
                     tf = counts[q]
@@ -285,7 +312,7 @@ class CandidateScorer:
                     b = 0.75
                     numerator = tf * (k1 + 1)
                     denominator = tf + k1 * (1.0 - b + b * (doc_len / self.bm25.avgdl))
-                    bm25_score += idf * (numerator / denominator)
+                    bm25_score += weight * idf * (numerator / denominator)
                     
         # Sigmoid-style compression to bound BM25 in [0, 1] range
         bm25_scaled = bm25_score / (bm25_score + 5.0) if bm25_score > 0 else 0.0
