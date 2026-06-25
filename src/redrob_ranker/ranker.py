@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import heapq
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -30,14 +31,48 @@ def rank_top_candidates(bundle_dir: str | Path, top_n: int = 100) -> list[dict[s
             raise FileNotFoundError("candidates.jsonl or candidates.jsonl.gz not found in bundle")
 
     heap: list[tuple[float, int, dict[str, Any], dict[str, Any]]] = []
-    for candidate in iter_candidate_records(source):
-        raw_score, signal = score_candidate(candidate, jd)
-        heap_key = rank_key(candidate, raw_score)
-        entry = (heap_key[0], heap_key[1], candidate, signal)
-        if len(heap) < top_n:
-            heapq.heappush(heap, entry)
-        elif entry > heap[0]:
-            heapq.heapreplace(heap, entry)
+    
+    # Process candidates concurrently in batches to maintain low memory usage
+    batch_size = 1000
+    max_active_futures = 8
+    batch = []
+    
+    def process_batch(cand_batch: list[dict[str, Any]]) -> list[tuple[tuple[float, dict[str, Any]], dict[str, Any]]]:
+        return [(score_candidate(cand, jd), cand) for cand in cand_batch]
+
+    with ThreadPoolExecutor() as executor:
+        futures = []
+        for candidate in iter_candidate_records(source):
+            batch.append(candidate)
+            if len(batch) >= batch_size:
+                futures.append(executor.submit(process_batch, batch))
+                batch = []
+                
+                # Limit active futures to cap memory consumption
+                while len(futures) >= max_active_futures:
+                    res_batch = futures.pop(0).result()
+                    for (raw_score, signal), cand in res_batch:
+                        heap_key = rank_key(cand, raw_score)
+                        entry = (heap_key[0], heap_key[1], cand, signal)
+                        if len(heap) < top_n:
+                            heapq.heappush(heap, entry)
+                        elif entry > heap[0]:
+                            heapq.heapreplace(heap, entry)
+                            
+        # Submit the last partial batch if any
+        if batch:
+            futures.append(executor.submit(process_batch, batch))
+            
+        # Resolve all remaining batches
+        while futures:
+            res_batch = futures.pop(0).result()
+            for (raw_score, signal), cand in res_batch:
+                heap_key = rank_key(cand, raw_score)
+                entry = (heap_key[0], heap_key[1], cand, signal)
+                if len(heap) < top_n:
+                    heapq.heappush(heap, entry)
+                elif entry > heap[0]:
+                    heapq.heapreplace(heap, entry)
 
     selected = sorted(heap, key=lambda item: (-item[0], _candidate_number(str(item[2].get("candidate_id", "")))))
 

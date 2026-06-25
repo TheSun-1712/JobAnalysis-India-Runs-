@@ -18,6 +18,15 @@ def _join_skill_list(skills: list[str]) -> str:
 
 
 def build_reasoning(candidate: dict[str, Any], signal: dict[str, Any]) -> str:
+    """
+    Constructs a natural language justification based on candidate facts and
+    structured agent evaluation signals.
+
+    Args:
+        candidate: The raw candidate profile dictionary.
+        signal: The structured output dictionary containing scores and matched patterns
+                from individual specialized evaluator agents.
+    """
     profile = candidate.get("profile", {})
     signals = candidate.get("redrob_signals", {})
     title = profile.get("current_title", "")
