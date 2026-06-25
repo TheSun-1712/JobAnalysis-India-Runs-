@@ -93,4 +93,62 @@ class BaseAgent(ABC):
         if email and any(domain in email for domain in ("example.com", "test.com", "dummy.com", "placeholder.com")):
             deduction += 0.50
             
+        # Check for timeline anomalies (overlapping full-time jobs or start > end)
+        history = candidate.get("career_history", [])
+        if len(history) >= 2:
+            intervals = []
+            corrupted = False
+            for job in history:
+                start_s = job.get("start_date")
+                end_s = job.get("end_date")
+                title = str(job.get("title", "")).lower()
+                if "intern" in title:
+                    continue
+                try:
+                    start_dt = datetime.strptime(str(start_s).strip(), "%Y-%m-%d")
+                    if not end_s or job.get("is_current"):
+                        end_dt = datetime(2026, 6, 25)
+                    else:
+                        end_dt = datetime.strptime(str(end_s).strip(), "%Y-%m-%d")
+                    if start_dt > end_dt:
+                        corrupted = True
+                        break
+                    intervals.append((start_dt, end_dt))
+                except Exception:
+                    continue
+            
+            if corrupted:
+                deduction += 1.50
+            else:
+                intervals.sort(key=lambda x: x[0])
+                total_overlap_days = 0
+                for i in range(len(intervals) - 1):
+                    end_current = intervals[i][1]
+                    start_next = intervals[i+1][0]
+                    if start_next < end_current:
+                        overlap = (end_current - start_next).days
+                        total_overlap_days += overlap
+                if total_overlap_days > 90:
+                    deduction += 1.00
+                elif total_overlap_days > 30:
+                    deduction += 0.40
+
+        # Check years of experience vs career span
+        years = float(profile.get("years_of_experience", 0.0))
+        if years > 0.0 and history:
+            oldest_start = None
+            for job in history:
+                start_s = job.get("start_date")
+                if start_s:
+                    try:
+                        dt = datetime.strptime(str(start_s).strip(), "%Y-%m-%d")
+                        if oldest_start is None or dt < oldest_start:
+                            oldest_start = dt
+                    except Exception:
+                        continue
+            if oldest_start:
+                span_years = (datetime(2026, 6, 25) - oldest_start).days / 365.25
+                if years > span_years + 2.0:  # Allow a 2-year buffer for prior unlisted experience
+                    deduction += 1.00
+
         return deduction
