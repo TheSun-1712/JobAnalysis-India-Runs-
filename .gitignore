@@ -4,9 +4,9 @@ __pycache__/
 .venv/
 
 # Challenge dataset bundle
-\[PUB\] India_runs_data_and_ai_challenge/**/candidates.jsonl
-\[PUB\] India_runs_data_and_ai_challenge/**/candidates.jsonl.gz
+data/candidates.jsonl
+data/candidates.jsonl.gz
 
 # Generated artifacts from the ranker
-\[PUB\] India_runs_data_and_ai_challenge/**/submission.csv
-\[PUB\] India_runs_data_and_ai_challenge/**/deck.pdf
+submission.csv
+deck.pdf

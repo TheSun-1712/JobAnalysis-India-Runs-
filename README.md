@@ -19,9 +19,9 @@ Hybrid CPU-only candidate ranking pipeline for the Redrob hackathon bundle.
 ## Run
 
 ```bash
-python scripts/generate_submission.py --bundle "e:/Projects/India Runs/[PUB] India_runs_data_and_ai_challenge/[PUB] India_runs_data_and_ai_challenge/India_runs_data_and_ai_challenge" --output submission.csv
-python scripts/build_deck.py --bundle "e:/Projects/India Runs/[PUB] India_runs_data_and_ai_challenge/[PUB] India_runs_data_and_ai_challenge/India_runs_data_and_ai_challenge" --output deck.pdf
-python "e:/Projects/India Runs/[PUB] India_runs_data_and_ai_challenge/[PUB] India_runs_data_and_ai_challenge/India_runs_data_and_ai_challenge/validate_submission.py" submission.csv
+python scripts/generate_submission.py --bundle data --output submission.csv
+python scripts/build_deck.py --output deck.pdf
+python validate_submission.py submission.csv
 ```
 
 The code uses only the Python standard library and is designed to stay well inside the 5-minute CPU budget on the released dataset.
