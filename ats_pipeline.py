@@ -269,8 +269,9 @@ SYNONYM_MAP: Dict[str, List[str]] = {
 }
 
 class CandidateScorer:
-    def __init__(self, config: ScoringConfig, baseline_profiles: List[CandidateProfile]):
+    def __init__(self, config: ScoringConfig, baseline_profiles: List[CandidateProfile], use_bandit: bool = False):
         self.config = config
+        self.use_bandit = use_bandit
         
         # Tokenize baseline corpus for BM25 background model parameters
         self.corpus_tokens = [p.raw_text.split() for p in baseline_profiles]
@@ -283,8 +284,15 @@ class CandidateScorer:
             self.config.weights.get("experience", 0.2),
             self.config.weights.get("project", 0.3)
         ])
+        
+        # Bandit variables (LinUCB)
+        self.d = 4  # dimension of scores vector
+        self.A = np.identity(self.d)
+        self.b = np.zeros(self.d)
+        self.alpha = 0.5  # exploration scale
+        self.history_x: Dict[str, np.ndarray] = {}
 
-    def score(self, profile: CandidateProfile) -> float:
+    def get_feature_vector(self, profile: CandidateProfile) -> np.ndarray:
         # Score Dimension 1: Semantic overlap (BM25)
         query = self.config.domain_keywords + self.config.must_have_skills
         query_tokens = [q.lower() for q in query]
@@ -348,10 +356,40 @@ class CandidateScorer:
             total_matches += len(matches)
         project_score = min(1.0, total_matches / 5.0)
 
-        # Fast Dot-Product scaling
-        scores_vector = np.array([bm25_scaled, skills_score, exp_score, project_score])
-        final_score = np.dot(self.weights, scores_vector)
-        return float(final_score)
+        return np.array([bm25_scaled, skills_score, exp_score, project_score])
+
+    def score(self, profile: CandidateProfile) -> float:
+        x = self.get_feature_vector(profile)
+        self.history_x[profile.id] = x  # Cache feature vector for updates
+        
+        if not self.use_bandit:
+            # Fast Dot-Product scaling
+            final_score = np.dot(self.weights, x)
+            return float(final_score)
+        else:
+            # LinUCB score calculation
+            A_inv = np.linalg.inv(self.A)
+            theta = np.dot(A_inv, self.b)
+            expected_reward = np.dot(theta, x)
+            uncertainty = self.alpha * math.sqrt(np.dot(x, np.dot(A_inv, x)))
+            return float(expected_reward + uncertainty)
+
+    def feedback_update(self, candidate_id: str, reward: float):
+        """
+        Updates the covariance matrix A and reward vector b based on recruiter interaction reward.
+        """
+        if candidate_id not in self.history_x:
+            return
+        x = self.history_x[candidate_id]
+        self.A += np.outer(x, x)
+        self.b += reward * x
+
+    def get_estimated_weights(self) -> np.ndarray:
+        """
+        Returns current theta coefficients (estimated weights).
+        """
+        A_inv = np.linalg.inv(self.A)
+        return np.dot(A_inv, self.b)
 
 # ==========================================
 # Phase 6: Heap Ranker & MMR Re-Ranker
@@ -592,9 +630,9 @@ if __name__ == "__main__":
 
     # 4. Initialize Multi-Dimensional Scorer
     print("Configuring Candidate Scorer (BM25 + exact + Gaussian)...")
-    scorer = CandidateScorer(config, baseline_profiles)
+    scorer = CandidateScorer(config, baseline_profiles, use_bandit=False)
 
-    # 5. Run the ranking pipeline
+    # 5. Run the ranking pipeline in Heuristic/Static Mode
     print("Running Streaming Ranking Pipeline...")
     stream = stream_candidates(mock_gz_path)
     audit_log: List[Dict[str, Any]] = []
@@ -613,4 +651,33 @@ if __name__ == "__main__":
     audit_out = "mock_audit.jsonl"
     print(f"\nWriting pipeline outputs to {csv_out} and {audit_out}...")
     write_pipeline_outputs(ranked_results, config, audit_log, csv_out, audit_out)
-    print("Done! End-to-end ATS pipeline execution completed flawlessly.")
+    print("Static pipeline execution completed.")
+
+    # 7. Run RL Contextual Bandit Feedback Simulation
+    print("\n--- Running RL Contextual Bandit Feedback Simulation ---")
+    scorer_rl = CandidateScorer(config, baseline_profiles, use_bandit=True)
+    
+    # We will simulate 3 rounds of recruiter feedback updates
+    for round_num in range(1, 4):
+        print(f"\n[Round {round_num}] Ranking Candidates...")
+        stream_sim = stream_candidates(mock_gz_path)
+        ranked_sim = rank_candidates(stream_sim, scorer_rl, detector=detector, top_n=20, audit_log=[])
+        
+        print("Ranked Shortlist (LinUCB Scores):")
+        for adj_score, orig_score, p in ranked_sim:
+            print(f" - {p.name} ({p.id}): MMR Score={adj_score:.4f}")
+            
+        # Simulate recruiter feedback:
+        # Suppose the recruiter prefers candidates with specific projects containing "aws" (Riya Sen).
+        # We give positive reward (1.0) to AWS matching candidates and 0.0 to others.
+        # This will train the bandit to prefer candidates with matching features.
+        print("Simulating Recruiter Feedback (Shortlisting candidates with AWS)...")
+        for adj_score, orig_score, p in ranked_sim:
+            reward = 1.0 if "aws" in p.raw_text else 0.0
+            scorer_rl.feedback_update(p.id, reward)
+            
+        # Print updated weights
+        theta = scorer_rl.get_estimated_weights()
+        print(f"Updated Bandit Theta (Weights estimate): Semantic={theta[0]:.4f}, Skills={theta[1]:.4f}, Experience={theta[2]:.4f}, Project={theta[3]:.4f}")
+        
+    print("\nDone! End-to-end ATS pipeline execution and RL bandit simulation completed flawlessly.")
