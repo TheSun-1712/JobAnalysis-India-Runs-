@@ -43,9 +43,39 @@ def _candidate_number(candidate_id: str) -> int:
         return 10**9
 
 
+# Module-level performance optimization constants
+TOKEN_RE = re.compile(r"[a-z0-9\+\#\-/']+")
+
+SKILL_SUBSTRINGS = (
+    "python", "sql", "spark", "airflow", "llm", "embedding", "retrieval", 
+    "ranking", "vector", "milvus", "faiss", "qdrant", "weaviate", "pinecone", 
+    "ndcg", "mrr", "map", "ab test", "evaluation"
+)
+
+SEMANTIC_TERM_WEIGHTS = (
+    ("embeddings", 3.0),
+    ("retrieval", 3.0),
+    ("ranking", 2.8),
+    ("vector", 1.5),
+    ("search", 1.2),
+    ("python", 1.0),
+    ("production", 1.0),
+    ("evaluation", 1.2),
+    ("ndcg", 1.6),
+    ("mrr", 1.4),
+    ("map", 1.0),
+    ("llm", 1.0),
+    ("fine", 0.8),
+)
+
+TECHNICAL_TITLE_HINTS = ("engineer", "scientist", "analyst", "developer", "architect")
+
+HYBRID_MODES = {"hybrid", "flexible", "onsite"}
+REMOTE_MODES = {"remote", "flexible"}
+
+
 def _token_counter(text: str) -> Counter[str]:
-    tokens = re.findall(r"[a-z0-9\+\#\-/']+", text.lower())
-    return Counter(tokens)
+    return Counter(TOKEN_RE.findall(text.lower()))
 
 
 def _gaussian(value: float, center: float, sigma: float) -> float:
@@ -68,21 +98,7 @@ class SemanticEvaluator:
         for term, weight in jd.desired_terms.items():
             if term in candidate_text:
                 score += 0.8 * weight
-        for term, weight in (
-            ("embeddings", 3.0),
-            ("retrieval", 3.0),
-            ("ranking", 2.8),
-            ("vector", 1.5),
-            ("search", 1.2),
-            ("python", 1.0),
-            ("production", 1.0),
-            ("evaluation", 1.2),
-            ("ndcg", 1.6),
-            ("mrr", 1.4),
-            ("map", 1.0),
-            ("llm", 1.0),
-            ("fine", 0.8),
-        ):
+        for term, weight in SEMANTIC_TERM_WEIGHTS:
             score += min(tokens.get(term, 0), 3) * weight * 0.1
         return min(3.5, score)
 
@@ -121,11 +137,7 @@ class SkillsEvaluator:
                 continue
             name_l = name.lower()
             if name_l in RELEVANT_SKILLS or any(
-                token in name_l for token in (
-                    "python", "sql", "spark", "airflow", "llm", "embedding", "retrieval", 
-                    "ranking", "vector", "milvus", "faiss", "qdrant", "weaviate", "pinecone", 
-                    "ndcg", "mrr", "map", "ab test", "evaluation"
-                )
+                token in name_l for token in SKILL_SUBSTRINGS
             ):
                 matched.append(name)
                 prof = str(skill.get("proficiency", "")).lower()
@@ -184,7 +196,7 @@ class BackgroundEvaluator:
                 product_hits += 1
             if any(hint in text for hint in CONSULTING_COMPANIES):
                 consulting_hits += 1
-            if any(hint in title for hint in ("engineer", "scientist", "analyst", "developer", "architect")):
+            if any(hint in title for hint in TECHNICAL_TITLE_HINTS):
                 technical_hits += 1
                 
         score = (
@@ -218,9 +230,9 @@ class LocationEvaluator:
             bonus += cfg.get("other_penalty", -0.12)
             
         match_bonus = cfg.get("match_bonus", 0.08)
-        if jd.work_mode == "hybrid" and mode in {"hybrid", "flexible", "onsite"}:
+        if jd.work_mode == "hybrid" and mode in HYBRID_MODES:
             bonus += match_bonus
-        elif jd.work_mode == "remote" and mode in {"remote", "flexible"}:
+        elif jd.work_mode == "remote" and mode in REMOTE_MODES:
             bonus += match_bonus
         elif jd.work_mode == "onsite" and mode == "onsite":
             bonus += match_bonus
