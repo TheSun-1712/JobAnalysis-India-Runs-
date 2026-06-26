@@ -41,14 +41,17 @@ class MasterAgent:
             try:
                 with cache_path.open("r", encoding="utf-8") as f:
                     data = json.load(f)
-                self.corpus_stats = {
-                    "vocab": set(data["vocab"]),
-                    "N": data["N"],
-                    "df": data["df"],
-                    "avgdl": data["avgdl"],
-                    "jd_text": self.jd_text
-                }
-                return
+                if "base_salary" in data and "salary_per_year" in data:
+                    self.corpus_stats = {
+                        "vocab": set(data["vocab"]),
+                        "N": data["N"],
+                        "df": data["df"],
+                        "avgdl": data["avgdl"],
+                        "jd_text": self.jd_text,
+                        "base_salary": data["base_salary"],
+                        "salary_per_year": data["salary_per_year"]
+                    }
+                    return
             except Exception:
                 pass
 
@@ -68,6 +71,7 @@ class MasterAgent:
         N = 0
         total_len = 0
         df = {term: 0 for term in vocab}
+        salaries = []
 
         from ..bundle import flatten_candidate_text
         for record in iter_candidate_records(source):
@@ -81,12 +85,43 @@ class MasterAgent:
                 if term in unique_tokens:
                     df[term] += 1
 
+            signals = record.get("redrob_signals", {})
+            if isinstance(signals, dict):
+                salary_range = signals.get("expected_salary_range_inr_lpa")
+                if salary_range and isinstance(salary_range, dict):
+                    min_expect = salary_range.get("min")
+                    if min_expect is not None:
+                        try:
+                            min_expect = float(min_expect)
+                            profile = record.get("profile", {})
+                            years = float(profile.get("years_of_experience", 0.0))
+                            if min_expect > 0.0:
+                                salaries.append((min_expect, years))
+                        except (ValueError, TypeError):
+                            pass
+
+        # Compute dynamic salary coefficients
+        base_salary, salary_per_year = 12.0, 6.0
+        if len(salaries) >= 5:
+            sorted_sals = sorted(item[0] for item in salaries)
+            n_sal = len(sorted_sals)
+            if n_sal % 2 == 1:
+                median_sal = sorted_sals[n_sal // 2]
+            else:
+                median_sal = (sorted_sals[n_sal // 2 - 1] + sorted_sals[n_sal // 2]) / 2.0
+            
+            if 5.0 <= median_sal <= 100.0:
+                base_salary = round(median_sal, 2)
+                salary_per_year = round(median_sal * 0.5, 2)
+
         self.corpus_stats = {
             "vocab": vocab,
             "N": N,
             "df": df,
             "avgdl": total_len / N if N > 0 else 100.0,
-            "jd_text": self.jd_text
+            "jd_text": self.jd_text,
+            "base_salary": base_salary,
+            "salary_per_year": salary_per_year
         }
 
         # Cache the results
@@ -95,12 +130,74 @@ class MasterAgent:
                 "vocab": list(vocab),
                 "N": N,
                 "df": df,
-                "avgdl": self.corpus_stats["avgdl"]
+                "avgdl": self.corpus_stats["avgdl"],
+                "base_salary": base_salary,
+                "salary_per_year": salary_per_year
             }
             with cache_path.open("w", encoding="utf-8") as f:
                 json.dump(cache_data, f)
         except Exception:
             pass
+
+    def get_dynamic_weights(self) -> dict[str, float]:
+        """Compute candidate ranking ensemble weights dynamically based on job description characteristics."""
+        weights = {
+            "Heuristics": 1.5,
+            "Simulated LLM": 1.5,
+            "BM25": 1.5,
+            "TF-IDF": 1.0,
+            "Semantic": 1.0,
+            "Jaccard Overlap": 1.0,
+            "Seniority": 1.0,
+            "Company Prestige": 1.0,
+            "Github Activity": 1.0,
+            "Constraints": 0.6,
+            "Job Stability": 0.6,
+            "Research & Publications": 0.6,
+            "Skill Associations": 0.6,
+            "Certifications": 0.6,
+            "Languages": 0.6,
+            "Side Projects": 0.6,
+            "Verified Assessments": 0.6,
+            "Talent Engagement": 0.6,
+            "Salary Alignment": 0.6,
+            "Profile Readability": 0.6,
+        }
+
+        # Check job description and requirements for dynamic adjustments
+        jd_text_lower = self.jd_text.lower()
+
+        # 1. Experience Requirements adjusting Seniority vs. Side Projects/Certifications
+        min_exp = self.jd.experience_min
+        if min_exp >= 6.0:
+            weights["Seniority"] = round(weights["Seniority"] * 1.5, 2)
+            weights["Side Projects"] = round(weights["Side Projects"] * 0.6, 2)
+            weights["Certifications"] = round(weights["Certifications"] * 0.6, 2)
+        elif min_exp <= 2.0:
+            weights["Seniority"] = round(weights["Seniority"] * 0.5, 2)
+            weights["Side Projects"] = round(weights["Side Projects"] * 1.8, 2)
+            weights["Certifications"] = round(weights["Certifications"] * 1.8, 2)
+
+        # 2. Research focus
+        research_keywords = {"research", "publication", "publications", "paper", "papers", "patent", "patents", "phd", "ph.d"}
+        if any(kw in jd_text_lower for kw in research_keywords):
+            weights["Research & Publications"] = round(weights["Research & Publications"] * 2.0, 2)
+
+        # 3. Github/Open Source focus
+        github_keywords = {"github", "git ", "open source", "open-source", "contribution", "contributions", "portfolio"}
+        if any(kw in jd_text_lower for kw in github_keywords):
+            weights["Github Activity"] = round(weights["Github Activity"] * 1.5, 2)
+
+        # 4. Salary & Budget focus
+        salary_keywords = {"salary", "budget", "compensation", "lpa", "inr"}
+        if any(kw in jd_text_lower for kw in salary_keywords):
+            weights["Salary Alignment"] = round(weights["Salary Alignment"] * 1.5, 2)
+
+        # 5. Strict Location / Relocation constraint sensitivity
+        if self.jd.location_terms or "onsite" in jd_text_lower or "hybrid" in jd_text_lower:
+            weights["Constraints"] = round(weights["Constraints"] * 1.8, 2)
+
+        return weights
 
     def run_ensemble_ranking(self, top_n: int = 100) -> list[dict[str, Any]]:
         """Stream candidates, evaluate them across all 20 sub-agents, and merge with WRRF."""
@@ -168,28 +265,7 @@ class MasterAgent:
             agent_rankings[name] = agent.get_top_rankings()
 
         # Weighted Reciprocal Rank Fusion (WRRF)
-        agent_weights = {
-            "Heuristics": 1.5,
-            "Simulated LLM": 1.5,
-            "BM25": 1.5,
-            "TF-IDF": 1.0,
-            "Semantic": 1.0,
-            "Jaccard Overlap": 1.0,
-            "Seniority": 1.0,
-            "Company Prestige": 1.0,
-            "Github Activity": 1.0,
-            "Constraints": 0.6,
-            "Job Stability": 0.6,
-            "Research & Publications": 0.6,
-            "Skill Associations": 0.6,
-            "Certifications": 0.6,
-            "Languages": 0.6,
-            "Side Projects": 0.6,
-            "Verified Assessments": 0.6,
-            "Talent Engagement": 0.6,
-            "Salary Alignment": 0.6,
-            "Profile Readability": 0.6,
-        }
+        agent_weights = self.get_dynamic_weights()
 
         candidate_map = {}
         rrf_scores = {}
@@ -243,26 +319,26 @@ class MasterAgent:
             skills_str = ", ".join(matched_skills[:4]) if matched_skills else "matching core stack"
 
             agent_highlights = {
-                "Heuristics": "comprehensive profile completeness metrics",
-                "TF-IDF": "optimal TF-IDF keyword relevance score",
-                "BM25": "high BM25 search relevance matching",
-                "Semantic": "strong semantic concept alignment",
-                "Simulated LLM": "top performance on rubric-based LLM screening",
-                "Jaccard Overlap": "broad Jaccard skills-set overlap",
-                "Constraints": "full constraint compliance (location & work mode)",
-                "Seniority": "consistent career trajectory & leadership seniority",
-                "Company Prestige": "notable background at top-tier product brands",
-                "Job Stability": "strong retention rate with low job-hopping risk",
-                "Research & Publications": "verified research credentials & publications",
-                "Skill Associations": "proven familiarity with adjacent technology stacks",
-                "Github Activity": "active open-source contributions & Git footprints",
+                "Heuristics": "excellent profile completeness and structured details",
+                "TF-IDF": "strong matching keywords in resume text",
+                "BM25": "highly relevant match with job description keywords",
+                "Semantic": "strong alignment with the core tech stack and domain",
+                "Simulated LLM": "high rating on qualifications and skills screening",
+                "Jaccard Overlap": "broad coverage of matching skills and related areas",
+                "Constraints": "full alignment with location and work mode constraints",
+                "Seniority": "consistent career progression and seniority",
+                "Company Prestige": "prior experience at top-tier companies",
+                "Job Stability": "strong tenure stability with low job-hopping risk",
+                "Research & Publications": "strong academic and research credentials",
+                "Skill Associations": "proven familiarity with related tech stacks and adjacent areas",
+                "Github Activity": "active open-source contributions and coding footprints",
                 "Certifications": "highly relevant professional certifications",
-                "Languages": "strong verified language & communication skills",
-                "Side Projects": "significant coding portfolio & side projects",
-                "Verified Assessments": "excellent scores on verified platform assessments",
-                "Talent Engagement": "high recruiter interest & profile visibility",
-                "Salary Alignment": "salary expectation matching role bracket",
-                "Profile Readability": "highly professional resume layout & tone"
+                "Languages": "strong communication and language skills",
+                "Side Projects": "solid portfolio of side projects and coding tasks",
+                "Verified Assessments": "excellent scores on technical skill assessments",
+                "Talent Engagement": "high recruiter response rate and activity",
+                "Salary Alignment": "expected salary aligned with the target budget bracket",
+                "Profile Readability": "clear and professionally formatted resume layout"
             }
 
             sorted_agent_ranks = sorted(ranks_info.items(), key=lambda x: x[1])

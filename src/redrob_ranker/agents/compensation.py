@@ -17,8 +17,10 @@ class CompensationAgent(BaseAgent):
         profile = candidate.get("profile", {})
         years = float(profile.get("years_of_experience", 0.0))
         
-        # Calculate an expected benchmark ceiling: base 12 LPA + 6 LPA per year of experience
-        benchmark_limit = 12.0 + years * 6.0
+        # Calculate an expected benchmark ceiling: use dynamic values from corpus_stats if present
+        base_salary = self.corpus_stats.get("base_salary", 12.0)
+        salary_per_year = self.corpus_stats.get("salary_per_year", 6.0)
+        benchmark_limit = base_salary + years * salary_per_year
         
         if min_expect <= benchmark_limit:
             return 1.0
